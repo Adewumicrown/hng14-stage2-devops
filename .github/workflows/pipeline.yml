@@ -49,9 +49,16 @@ jobs:
       - name: Lint Python — Worker
         run: flake8 worker/worker.py --max-line-length=120 --extend-ignore=E302,E303,E301
 
-      - name: Lint JavaScript — Frontend
+      - name: Create ESLint Config
         run: |
-          echo '{"env":{"node":true,"es2021":true},"extends":"eslint:recommended","rules":{"no-unused-vars":"warn","no-console":"off"}}' > .eslintrc.json
+          echo "export default [
+            {
+        rules: {
+            'no-unused-vars': 'warn',
+            'no-console': 'off'
+        }
+      }
+    ];" > eslint.config.mjs
           eslint frontend/app.js --no-eslintrc -c .eslintrc.json
 
       - name: Lint Dockerfiles
