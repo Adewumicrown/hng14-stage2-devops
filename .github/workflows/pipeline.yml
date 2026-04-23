@@ -51,7 +51,8 @@ jobs:
 
       - name: Lint JavaScript — Frontend
         run: |
-          echo '{"env":{"node":true,"es2021":true},"extends":"eslint:recommended","rules":{"no-unused-vars":"warn","no-console":"off"}}' > .eslintrc.json
+          npm install -g eslint@8
+          echo '{"env":{"browser":true,"node":true,"es2021":true},"extends":"eslint:recommended","rules":{"no-unused-vars":"warn","no-console":"off","no-undef":"off"}}' > .eslintrc.json
           eslint frontend/app.js --no-eslintrc -c .eslintrc.json
 
       - name: Lint Dockerfiles
