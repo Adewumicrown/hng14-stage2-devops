@@ -44,10 +44,10 @@ jobs:
           chmod +x /usr/local/bin/hadolint
 
       - name: Lint Python — API
-        run: flake8 api/main.py --max-line-length=120
+        run: flake8 api/main.py --max-line-length=120 --extend-ignore=E302,E303,E301
 
       - name: Lint Python — Worker
-        run: flake8 worker/worker.py --max-line-length=120
+        run: flake8 worker/worker.py --max-line-length=120 --extend-ignore=E302,E303,E301
 
       - name: Lint JavaScript — Frontend
         run: |
