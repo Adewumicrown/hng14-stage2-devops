@@ -35,7 +35,7 @@ jobs:
         run: pip install flake8
 
       - name: Install JS lint tools
-        run: npm install -g eslint @eslint/js
+        run: npm install -g eslint
 
       - name: Install Hadolint
         run: |
@@ -51,19 +51,8 @@ jobs:
 
       - name: Lint JavaScript — Frontend
         run: |
-          cat > eslint.config.mjs << 'ESLINTEOF'
-          import js from "@eslint/js";
-          export default [
-            js.configs.recommended,
-            {
-              rules: {
-                "no-unused-vars": "warn",
-                "no-console": "off"
-              }
-            }
-          ];
-          ESLINTEOF
-          eslint frontend/app.js
+          echo '{"env":{"node":true,"es2021":true},"extends":"eslint:recommended","rules":{"no-unused-vars":"warn","no-console":"off"}}' > .eslintrc.json
+          eslint frontend/app.js --no-eslintrc -c .eslintrc.json
 
       - name: Lint Dockerfiles
         run: |
@@ -325,10 +314,8 @@ jobs:
               SERVICE=$1
               echo "--- Rolling update: $SERVICE ---"
 
-              # Start new container alongside old one
               docker compose up -d --no-deps --build $SERVICE
 
-              # Wait up to 60s for the new container to be healthy
               SECONDS=0
               while [ $SECONDS -lt 60 ]; do
                 HEALTH=$(docker inspect --format='{{.State.Health.Status}}' $(docker compose ps -q $SERVICE) 2>/dev/null || echo "unknown")
@@ -340,13 +327,11 @@ jobs:
                 sleep 5
               done
 
-              # Health check failed — abort and leave old container running
               echo "ERROR: $SERVICE did not become healthy within 60s. Aborting."
               docker compose up -d --no-deps --no-build $SERVICE
               return 1
             }
 
-            # Roll each service in dependency order
             rolling_update api
             rolling_update worker
             rolling_update frontend
