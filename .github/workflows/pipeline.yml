@@ -1,0 +1,355 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: localhost:5000
+
+jobs:
+  # ===========================================================================
+  # STAGE 1: LINT
+  # ===========================================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install Python lint tools
+        run: pip install flake8
+
+      - name: Install JS lint tools
+        run: npm install -g eslint @eslint/js
+
+      - name: Install Hadolint
+        run: |
+          curl -sSL https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64 \
+            -o /usr/local/bin/hadolint
+          chmod +x /usr/local/bin/hadolint
+
+      - name: Lint Python — API
+        run: flake8 api/main.py --max-line-length=120
+
+      - name: Lint Python — Worker
+        run: flake8 worker/worker.py --max-line-length=120
+
+      - name: Lint JavaScript — Frontend
+        run: |
+          cat > eslint.config.mjs << 'ESLINTEOF'
+          import js from "@eslint/js";
+          export default [
+            js.configs.recommended,
+            {
+              rules: {
+                "no-unused-vars": "warn",
+                "no-console": "off"
+              }
+            }
+          ];
+          ESLINTEOF
+          eslint frontend/app.js
+
+      - name: Lint Dockerfiles
+        run: |
+          hadolint api/Dockerfile
+          hadolint worker/Dockerfile
+          hadolint frontend/Dockerfile
+
+  # ===========================================================================
+  # STAGE 2: TEST
+  # ===========================================================================
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r api/requirements.txt
+          pip install pytest pytest-cov fakeredis httpx
+
+      - name: Run unit tests with coverage
+        run: |
+          pytest tests/ -v --cov=api --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ===========================================================================
+  # STAGE 3: BUILD
+  # ===========================================================================
+  build:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    needs: test
+
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/api:${{ github.sha }}
+            ${{ env.REGISTRY }}/api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./worker
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/worker:${{ github.sha }}
+            ${{ env.REGISTRY }}/worker:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/frontend:${{ github.sha }}
+            ${{ env.REGISTRY }}/frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # STAGE 4: SECURITY SCAN
+  # ===========================================================================
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+
+      - name: Rebuild images into local daemon for scanning
+        run: |
+          docker buildx build --load -t api:scan ./api
+          docker buildx build --load -t worker:scan ./worker
+          docker buildx build --load -t frontend:scan ./frontend
+
+      - name: Install Trivy
+        run: |
+          curl -sSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Scan API image
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL \
+            --format sarif \
+            --output trivy-api.sarif \
+            api:scan
+
+      - name: Scan Worker image
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL \
+            --format sarif \
+            --output trivy-worker.sarif \
+            worker:scan
+
+      - name: Scan Frontend image
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL \
+            --format sarif \
+            --output trivy-frontend.sarif \
+            frontend:scan
+
+      - name: Upload Trivy SARIF results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-sarif-results
+          path: "*.sarif"
+
+  # ===========================================================================
+  # STAGE 5: INTEGRATION TEST
+  # ===========================================================================
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: security-scan
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build all images
+        run: |
+          docker compose build
+
+      - name: Start full stack
+        run: |
+          docker compose up -d
+          echo "Waiting for all services to be healthy..."
+          timeout 120 bash -c '
+            until docker compose ps | grep -E "(api|worker|frontend|redis)" | grep -v "unhealthy" | grep "healthy" | wc -l | grep -q "4"; do
+              echo "Services not all healthy yet..."
+              docker compose ps
+              sleep 5
+            done
+          '
+          echo "All services healthy!"
+
+      - name: Submit a job and poll until completed
+        run: |
+          echo "Submitting job..."
+          JOB_RESPONSE=$(curl -sf -X POST http://localhost:3000/submit)
+          echo "Response: $JOB_RESPONSE"
+
+          JOB_ID=$(echo "$JOB_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['job_id'])")
+          echo "Job ID: $JOB_ID"
+
+          echo "Polling job status..."
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          STATUS=""
+
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            STATUS=$(curl -sf http://localhost:3000/status/$JOB_ID | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])")
+            echo "Attempt $ATTEMPT: status=$STATUS"
+            if [ "$STATUS" = "completed" ]; then
+              echo "Job completed successfully!"
+              break
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+            sleep 2
+          done
+
+          if [ "$STATUS" != "completed" ]; then
+            echo "ERROR: Job did not complete. Final status: $STATUS"
+            exit 1
+          fi
+
+      - name: Print logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v
+
+  # ===========================================================================
+  # STAGE 6: DEPLOY (main branch only)
+  # ===========================================================================
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: integration-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via rolling update
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd ${{ secrets.DEPLOY_PATH }}
+
+            echo "Pulling latest code..."
+            git pull origin main
+
+            echo "Starting rolling update..."
+
+            rolling_update() {
+              SERVICE=$1
+              echo "--- Rolling update: $SERVICE ---"
+
+              # Start new container alongside old one
+              docker compose up -d --no-deps --build $SERVICE
+
+              # Wait up to 60s for the new container to be healthy
+              SECONDS=0
+              while [ $SECONDS -lt 60 ]; do
+                HEALTH=$(docker inspect --format='{{.State.Health.Status}}' $(docker compose ps -q $SERVICE) 2>/dev/null || echo "unknown")
+                echo "$SERVICE health: $HEALTH (${SECONDS}s)"
+                if [ "$HEALTH" = "healthy" ]; then
+                  echo "$SERVICE is healthy. Rolling update complete."
+                  return 0
+                fi
+                sleep 5
+              done
+
+              # Health check failed — abort and leave old container running
+              echo "ERROR: $SERVICE did not become healthy within 60s. Aborting."
+              docker compose up -d --no-deps --no-build $SERVICE
+              return 1
+            }
+
+            # Roll each service in dependency order
+            rolling_update api
+            rolling_update worker
+            rolling_update frontend
+
+            echo "All services updated successfully."
+            docker compose ps
