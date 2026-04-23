@@ -242,7 +242,7 @@ jobs:
               docker compose ps
               sleep 5
             done
-          '
+          
           echo "All services healthy!"
 
       - name: Submit a job and poll until completed
