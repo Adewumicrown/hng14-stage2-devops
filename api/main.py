@@ -32,6 +32,7 @@ def get_redis_client():
                 time.sleep(2 ** attempt)
     raise RuntimeError("Could not connect to Redis after multiple attempts")
 
+
 r = None
 
 def get_redis():
