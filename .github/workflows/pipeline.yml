@@ -58,8 +58,8 @@ jobs:
             'no-console': 'off'
         }
       }
-    ];" > eslint.config.mjs
-          eslint frontend/app.js --no-eslintrc -c .eslintrc.json
+    ];" > eslint.config.mj
+          eslint frontend/app.js
 
       - name: Lint Dockerfiles
         run: |
