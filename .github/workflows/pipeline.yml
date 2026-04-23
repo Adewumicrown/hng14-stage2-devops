@@ -280,16 +280,7 @@ jobs:
   # STAGE 6: DEPLOY (main branch only)
   # ===========================================================================
   deploy:
-    name: Deploy
-    runs-on: ubuntu-latest
-    needs: integration-test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Deploy via rolling update
+    - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -298,37 +289,12 @@ jobs:
           script: |
             set -e
             cd ${{ secrets.DEPLOY_PATH }}
-
             echo "Pulling latest code..."
             git pull origin main
-
-            echo "Starting rolling update..."
-
-            rolling_update() {
-              SERVICE=$1
-              echo "--- Rolling update: $SERVICE ---"
-
-              docker compose up -d --no-deps --build $SERVICE
-
-              SECONDS=0
-              while [ $SECONDS -lt 60 ]; do
-                HEALTH=$(docker inspect --format='{{.State.Health.Status}}' $(docker compose ps -q $SERVICE) 2>/dev/null || echo "unknown")
-                echo "$SERVICE health: $HEALTH (${SECONDS}s)"
-                if [ "$HEALTH" = "healthy" ]; then
-                  echo "$SERVICE is healthy. Rolling update complete."
-                  return 0
-                fi
-                sleep 5
-              done
-
-              echo "ERROR: $SERVICE did not become healthy within 60s. Aborting."
-              docker compose up -d --no-deps --no-build $SERVICE
-              return 1
-            }
-
-            rolling_update api
-            rolling_update worker
-            rolling_update frontend
-
-            echo "All services updated successfully."
+            echo "Bringing up full stack..."
+            docker compose pull 2>/dev/null || true
+            docker compose up -d --build
+            echo "Waiting for API to be healthy..."
+            timeout 120 bash -c 'until curl -sf http://localhost:8000/health > /dev/null; do echo "waiting..."; sleep 5; done'
+            echo "Deploy complete!"
             docker compose ps
