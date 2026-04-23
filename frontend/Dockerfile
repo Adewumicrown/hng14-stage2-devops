@@ -1,7 +1,7 @@
 # =============================================================================
 # STAGE 1: builder — install dependencies
 # =============================================================================
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ RUN npm ci --omit=dev
 # =============================================================================
 # STAGE 2: final — lean production image
 # =============================================================================
-FROM node:18-alpine AS final
+FROM node:20-alpine AS final
 
 WORKDIR /app
 
