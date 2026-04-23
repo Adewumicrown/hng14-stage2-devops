@@ -1,6 +1,3 @@
-
-
-
 from fastapi import FastAPI, HTTPException
 import redis
 import uuid
@@ -12,7 +9,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-
 
 def get_redis_client():
     """Create Redis client with retry logic."""
@@ -36,31 +32,33 @@ def get_redis_client():
                 time.sleep(2 ** attempt)
     raise RuntimeError("Could not connect to Redis after multiple attempts")
 
+r = None
 
-r = get_redis_client()
-
+def get_redis():
+    global r
+    if r is None:
+        r = get_redis_client()
+    return r
 
 @app.get("/health")
 def health_check():
     try:
-        r.ping()
+        get_redis().ping()
         return {"status": "healthy"}
     except Exception:
         raise HTTPException(status_code=503, detail="Redis unavailable")
 
-
 @app.post("/jobs")
 def create_job():
     job_id = str(uuid.uuid4())
-    r.lpush("jobs", job_id)
-    r.hset(f"job:{job_id}", "status", "queued")
+    get_redis().lpush("jobs", job_id)
+    get_redis().hset(f"job:{job_id}", "status", "queued")
     logger.info(f"Created job {job_id}")
     return {"job_id": job_id}
 
-
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
-    status = r.hget(f"job:{job_id}", "status")
+    status = get_redis().hget(f"job:{job_id}", "status")
     if not status:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"job_id": job_id, "status": status}
